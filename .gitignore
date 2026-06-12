@@ -1,0 +1,24 @@
+# Generated vim help tags (`:helptags`)
+doc/tags
+
+# Vim/Neovim swap, backup & undo files
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Lua tooling
+.luacheckcache
+luacov.stats.out
+luacov.report.out
+lua_modules/
+.luarocks/
+*.rock
+*.src.rock
+
+# Test scratch
+/tests/output/
+
+# OS cruft
+.DS_Store
+Thumbs.db

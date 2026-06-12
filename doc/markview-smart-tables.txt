@@ -1,0 +1,167 @@
+*markview-smart-tables.txt*  Auto-fit & word-wrap wide tables for markview.nvim
+
+==============================================================================
+Table of Contents                            *markview-smart-tables-contents*
+
+  1. Introduction ......... |markview-smart-tables-introduction|
+  2. Requirements ......... |markview-smart-tables-requirements|
+  3. Setup ................ |markview-smart-tables-setup|
+  4. Options .............. |markview-smart-tables-options|
+  5. Behaviour ............ |markview-smart-tables-behaviour|
+  6. Health ............... |markview-smart-tables-health|
+  7. Limitations .......... |markview-smart-tables-limitations|
+
+==============================================================================
+1. Introduction                          *markview-smart-tables-introduction*
+
+markview-smart-tables.nvim fits oversized markdown tables to the window inside
+markview.nvim (https://github.com/OXY2DEV/markview.nvim).
+
+markview renders tables beautifully — until one is wider than the window. With
+'wrap' on, wide tables fall back to a degraded rendering; with 'wrap' off they
+run past the right edge. This plugin fits oversized tables: columns shrink
+(widest first), overflowing cells word-wrap across lines, and a thin rule
+separates data rows so multi-line rows stay readable.
+
+It plugs into markview's custom-renderer mechanism (see
+|markview.nvim-renderers|) — no fork, no patches. Tables that do not need
+fitting keep markview's stock rendering.
+
+==============================================================================
+2. Requirements                          *markview-smart-tables-requirements*
+
+- Neovim 0.11+ — `conceal_lines` is used to hide the source rows. Older
+  versions transparently fall back to stock markview rendering.
+- markview.nvim (https://github.com/OXY2DEV/markview.nvim).
+
+==============================================================================
+3. Setup                                        *markview-smart-tables-setup*
+
+                                              *markview-smart-tables.setup()*
+require("markview-smart-tables").setup({opts})
+
+Setup takes the plugin's options (see |markview-smart-tables-options|). With
+lazy.nvim, the `opts` table is passed here automatically.
+
+Two steps are required. First, configure this plugin's options: >lua
+
+    {
+      "gunasekar/markview-smart-tables.nvim",
+      dependencies = { "OXY2DEV/markview.nvim" },
+      opts = {
+        wrap_width = 0.9,
+        wrap_minwidth = 5,
+      },
+    }
+<
+Second — and this is required; `opts` alone does nothing — wire the renderer
+into markview: >lua
+
+    require("markview").setup({
+      renderers = {
+        markdown_table = function (buffer, item)
+          require("markview-smart-tables").render(buffer, item)
+        end,
+      },
+    })
+<
+                                             *markview-smart-tables.render()*
+require("markview-smart-tables").render({buffer}, {item})
+
+The drop-in `renderers.markdown_table` implementation. Tries the fitted,
+fully-virtual table first and falls back to markview's stock table renderer
+whenever the smart path declines (see |markview-smart-tables-behaviour|).
+
+==============================================================================
+4. Options                                    *markview-smart-tables-options*
+
+                                                  *markview-smart-tables.config*
+Defaults: >lua
+
+    {
+      enable = true,
+      wrap_width = 0.9,
+      wrap_minwidth = 5,
+    }
+<
+                                          *markview-smart-tables-option-enable*
+`enable` ~
+    boolean, default `true`. When `false`, the smart path is skipped entirely
+    and markview renders every table with its stock renderer.
+
+                                      *markview-smart-tables-option-wrap_width*
+`wrap_width` ~
+    number, default `0.9`. The maximum width a fitted table may occupy:
+      - a fraction in `(0, 1]` — that share of the window width (`0.9` ⇒ 90%);
+      - an integer `> 1` — an absolute column count, clamped to the window;
+      - anything else — defaults to 90% of the window.
+
+                                   *markview-smart-tables-option-wrap_minwidth*
+`wrap_minwidth` ~
+    integer, default `5`. The smallest width (in cells) a column may shrink to
+    before longer words are hard-broken. In pathological cases (a very narrow
+    window with many columns) columns are forced below this so the table never
+    overflows.
+
+==============================================================================
+5. Behaviour                                *markview-smart-tables-behaviour*
+
+'wrap' on ~
+    Every table is drawn fitted to the window. Soft-wrap breaks markview's
+    normal in-buffer table rendering, so the fitted form replaces the degraded
+    fallback you would otherwise get.
+
+'wrap' off ~
+    Only tables that overflow the window are fitted; fitting tables keep
+    markview's stock in-buffer rendering (real text, visible cursor).
+
+Editing ~
+    A fitted table is drawn over its hidden source lines. Enter insert mode (or
+    use markview's hybrid mode, `preview.hybrid_modes`) to reveal and edit the
+    raw markdown.
+
+Inline styling ~
+    Bold, italic, strikethrough, inline code, and links inside cells are
+    preserved through the word-wrap. Styling is read from treesitter (the same
+    captures markview uses); code spans and links additionally reuse markview's
+    own config — code padding/highlight, and the link icon + highlight resolved
+    through markview's matcher (a github URL gets its github glyph). Text markview
+    substitutes — entities (`&amp;` -> `&`), emoji shortcodes, escapes (`\|` ->
+    `|`) — is applied too (via markview's `tostring`), so fitted cells match
+    markview's stock tables.
+
+Resizing ~
+    Window geometry changes (splits, sidebars, terminal resize) re-fit tables
+    automatically, debounced with markview's `preview.debounce`.
+
+Decline-to-stock ~
+    The smart path returns control to markview's stock renderer when it cannot
+    safely take over: Neovim < 0.11, a table that already fits under 'nowrap',
+    a row mid-edit that parses to zero columns, an active
+    `preview.linewise_hybrid_mode`, or a table that spans the whole buffer with
+    no neighbour line to anchor the virtual copy to. The plugin never hides
+    content it cannot redraw.
+
+The table borders, separators, and highlights reuse the markview
+`markdown.tables` `parts`/`hl` configuration, so fitted tables match the theme.
+
+==============================================================================
+6. Health                                      *markview-smart-tables-health*
+
+Run |:checkhealth| to validate the setup: >vim
+
+    :checkhealth markview-smart-tables
+<
+It checks the Neovim version, that markview is installed, that the
+`renderers.markdown_table` hook is wired up, and that hybrid mode is compatible.
+
+==============================================================================
+7. Limitations                            *markview-smart-tables-limitations*
+
+- Inline cell styling needs treesitter (the `markdown_inline` parser, which
+  markview requires anyway). Without it, cells fall back to markview's `tostring`
+  — correct text, no per-span highlights.
+- The plugin reaches into a few markview internals; a major markview refactor
+  may require a plugin update. See ARCHITECTURE.md for the full surface.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
