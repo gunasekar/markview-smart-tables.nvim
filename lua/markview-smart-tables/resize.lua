@@ -60,6 +60,17 @@ local function on_resized(args)
     return
   end
 
+  --- `new_timer()` returns nil on failure(e.g. fd exhaustion). Without a timer
+  --- to debounce through, render synchronously rather than indexing nil.
+  if not timer then
+    for _, buf in ipairs(bufs) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(require("markview.actions").render, buf)
+      end
+    end
+    return
+  end
+
   local delay = spec.get({ "preview", "debounce" }, { fallback = 25, ignore_enable = true })
 
   timer:stop()
@@ -75,7 +86,8 @@ local function on_resized(args)
 
       for _, buf in ipairs(bufs) do
         if vim.api.nvim_buf_is_valid(buf) then
-          actions.render(buf)
+          --- Guarded so a render error on one buffer doesn't abort the rest.
+          pcall(actions.render, buf)
         end
       end
     end)

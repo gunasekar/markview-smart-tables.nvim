@@ -313,7 +313,14 @@ function M.segments(buffer, raw)
     return memo[raw]
   end
 
-  local segs = build(buffer, raw)
+  --- `build` drives treesitter(`parser:parse`, `query:iter_captures`), which can
+  --- throw on rare parser/query errors. Guarded so such an error degrades to the
+  --- `tostring` fallback below instead of escaping the render loop(which would
+  --- skip the stock-renderer fallback too, leaving the table undrawn).
+  local built_ok, segs = pcall(build, buffer, raw)
+  if not built_ok then
+    segs = nil
+  end
 
   if not segs then
     --- No treesitter: fall back to markview's concealed plain text(guarded, so a

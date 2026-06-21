@@ -309,11 +309,21 @@ end
 ---@param vlines table[]
 ---@return boolean placed `false` when there is no neighbour to anchor to(nothing is drawn).
 local function place(buffer, ns, range, nlines, vlines)
+  local line_count = vim.api.nvim_buf_line_count(buffer)
+
+  --- `nlines` comes from markview's parse; if the buffer shrank before this
+  --- render callback ran(rapid edits, async deletion), the source rows may no
+  --- longer exist and `nvim_buf_set_extmark` below would throw "row value
+  --- outside range". Decline so the caller falls back to the stock renderer.
+  if range.row_start + nlines > line_count then
+    return false
+  end
+
   local anchor
 
   if range.row_start > 0 then
     anchor = { row = range.row_start - 1, above = false }
-  elseif range.row_start + nlines <= vim.api.nvim_buf_line_count(buffer) - 1 then
+  elseif range.row_start + nlines <= line_count - 1 then
     anchor = { row = range.row_start + nlines, above = true }
   else
     --- Table spans the whole buffer; concealing its lines would hide
@@ -381,7 +391,7 @@ M.render = function(buffer, item, config, ns)
   local win = utils.buf_getwin(buffer)
   local nlines = #(item.text or {})
 
-  if type(win) ~= "number" or nlines == 0 then
+  if type(win) ~= "number" or not vim.api.nvim_win_is_valid(win) or nlines == 0 then
     return false
   end
 
@@ -434,7 +444,11 @@ M.render = function(buffer, item, config, ns)
 
   --- Fit to `wrap_width`. Each column is drawn as `" " .. cell .. " "`
   --- (width + 2) with `ncols + 1` vertical borders.
-  local min_col = type(config.wrap_minwidth) == "number" and config.wrap_minwidth or 5
+  --- Clamp to >= 1: a column floor of 0 or below drives fitted widths to(or
+  --- past) zero, where the border builders and the content builder stop agreeing
+  --- on width and the table misrenders. `fit_columns` already treats 1 as its
+  --- hard floor.
+  local min_col = math.max(1, type(config.wrap_minwidth) == "number" and config.wrap_minwidth or 5)
   local budget = wrap.fit_target(win, config) - range.col_start - ((ncols + 1) + (2 * ncols))
   local widths, shrunk = wrap.fit_columns(natural, budget, min_col)
 
