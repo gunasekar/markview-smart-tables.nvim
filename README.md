@@ -72,9 +72,11 @@ markview is installed, and that the renderer hook is wired up.
   degraded fallback you'd otherwise get).
 - **`'wrap'` off** — only tables that overflow the window are fitted; fitting
   tables keep markview's stock in-buffer rendering (real text, visible cursor).
-- **Editing** — a fitted table is drawn over its hidden source lines. Enter
-  insert mode (or use markview's hybrid mode, `preview.hybrid_modes`) to reveal
-  and edit the raw markdown.
+- **Editing / navigating** — a fitted table is drawn over its source lines,
+  which are concealed to zero height, so the cursor is invisible while it is on
+  the table (in any mode). Reveal the raw markdown to navigate or edit it with
+  markview's hybrid mode (`preview.hybrid_modes`) — see [Editing and navigating
+  fitted tables](#editing-and-navigating-fitted-tables).
 - **Inline styling** — bold, italic, strikethrough, inline code, and links
   inside cells are preserved through the word-wrap. Styling is read from
   treesitter (the same captures markview uses); code spans and links additionally
@@ -90,6 +92,81 @@ markview is installed, and that the renderer hook is wired up.
 
 The table borders, separators, and highlights reuse your markview
 `markdown.tables` `parts`/`hl` configuration, so fitted tables match your theme.
+
+## Editing and navigating fitted tables
+
+A fitted table is drawn as virtual text over its source lines, which are
+concealed to **zero screen height** (`conceal_lines`) — that is what lets cells
+wrap onto multiple lines. This has an inherent trade-off: the cursor lives in
+that hidden text, so **while the cursor is on a fitted table it is invisible**.
+A motion like `e` walks through the cells, but the cursor appears pinned to the
+table's top line until it leaves — in *any* mode, not just when editing. You
+cannot have the fitted render and a visibly tracking cursor on the same lines at
+once; this is true of any fully-virtual table rendering.
+
+To get a visible cursor (and to edit), reveal the raw markdown with markview's
+**hybrid mode** by listing the modes you navigate/edit in under
+`preview.hybrid_modes`. It is **empty by default**, so nothing reveals until you
+set it:
+
+```lua
+require("markview").setup({
+  preview = {
+    -- Reveal the node under the cursor in these modes. Modes: "n" normal,
+    -- "v"/"V" charwise/linewise visual, "i" insert.
+    hybrid_modes = { "n", "v", "V", "i" },
+  },
+})
+```
+
+Now moving the cursor onto a table reveals its raw `| a | b |` rows (visible,
+navigable, editable) and moving off re-fits it. The trade-off is that a wide
+table shows raw (unfitted) *while the cursor is on it* — drop modes from the
+list to limit when that happens (e.g. `{ "i" }` reveals only while editing).
+
+## How it compares to stock markview rendering
+
+Both produce the same box-drawing table on screen and share the same theme
+configuration. They differ in *how* that table is drawn, which leads to
+different trade-offs.
+
+**Rendering model.** Stock markview decorates the buffer in place: the real
+markdown line stays in the buffer and extmarks are layered on top — the `|`
+characters are concealed and replaced with inline virtual border glyphs, cells
+are padded with virtual spaces, and the outer borders are drawn as virtual
+text/lines. The cell text on screen is the buffer's own text. Smart tables
+instead hides the source lines (`conceal_lines`, zero screen height) and emits
+the entire table — borders, headers, and every cell, including wrapped lines —
+as virtual lines. The cell text on screen is a re-tokenized copy painted over
+the concealed source.
+
+**Why the difference exists.** Inline virtual text is positioned by buffer
+column, and Neovim computes soft-wrap break points from raw buffer columns
+before virtual text is applied. So when a table line is wider than the window
+and `'wrap'` is on, the in-place decorations break apart at the wrap point;
+markview detects this and returns early, leaving the raw wrapped markdown. A
+virtual-line block is not soft-wrapped mid-glyph and the concealed source has
+zero height, so cell text can be laid out across multiple lines. Moving a cell's
+text onto a second line is only possible in the virtual-line model, because the
+in-place model has no second buffer line to place it on.
+
+**Relation to a from-scratch CLI renderer.** Smart tables follows the pipeline a
+standalone terminal table tool uses — tokenize cells, measure columns, fit to a
+width budget, word-wrap, emit complete lines — and composes an independent
+display list rather than annotating existing text. Stock markview's model is
+editor-coupled: it relies on buffer-anchored conceal and inline virtual text to
+augment text that remains in the buffer, which keeps that text real (the cursor
+lands on it, edits apply directly) without composing a separate grid.
+
+**Resource usage.** The in-place model emits a small, fixed number of extmarks
+per line and reflows with the buffer. The virtual model does more per fitted
+table: it runs a `markdown_inline` treesitter parse per cell to recover inline
+styling, performs the fit/word-wrap computation, and emits a virtual line per
+output line; because the layout is sized to the window, it also installs a
+debounced resize autocmd (lazily, only once a fitted table is actually drawn).
+Smart tables declines back to stock rendering when fitting isn't needed (table
+already fits with `'wrap'` off, Neovim < 0.11, mid-edit rows, `linewise_hybrid_mode`,
+no anchor line), so the extra cost applies only to tables it fits.
 
 ## Options
 

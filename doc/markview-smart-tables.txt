@@ -115,10 +115,33 @@ Defaults: >lua
     Only tables that overflow the window are fitted; fitting tables keep
     markview's stock in-buffer rendering (real text, visible cursor).
 
-Editing ~
-    A fitted table is drawn over its hidden source lines. Enter insert mode (or
-    use markview's hybrid mode, `preview.hybrid_modes`) to reveal and edit the
-    raw markdown.
+Editing and navigating ~
+    A fitted table is virtual text drawn over its source lines, which are
+    concealed to zero screen height (`conceal_lines`) — that is what lets cells
+    wrap onto multiple lines. The trade-off is inherent: the cursor lives in
+    that hidden text, so while the cursor is on a fitted table it is invisible.
+    A motion like `e` walks through the cells, but the cursor appears pinned to
+    the table's top line until it leaves — in any mode, not just when editing.
+    The fitted render and a visibly tracking cursor cannot share the same lines
+    at once; this is true of any fully-virtual table rendering.
+
+    To get a visible cursor (and to edit), reveal the raw markdown with
+    markview's hybrid mode by listing the modes you navigate/edit in under
+    `preview.hybrid_modes`. It is empty by default, so nothing reveals until you
+    set it: >lua
+
+        require("markview").setup({
+          preview = {
+            -- Modes: "n" normal, "v"/"V" visual, "i" insert.
+            hybrid_modes = { "n", "v", "V", "i" },
+          },
+        })
+<
+    Moving the cursor onto a table then reveals its raw `| a | b |` rows
+    (visible, navigable, editable) and moving off re-fits it. The trade-off is
+    that a wide table shows raw (unfitted) while the cursor is on it — drop
+    modes from the list to limit when that happens (`{ "i" }` reveals only while
+    editing).
 
 Inline styling ~
     Bold, italic, strikethrough, inline code, and links inside cells are
