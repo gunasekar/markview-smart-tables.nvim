@@ -1,10 +1,19 @@
 --[[
-Re-render on window resize.
+Re-render when the window layout changes.
 
-Smart tables are fitted to the window at render time, so a window geometry
-change(sidebar toggle, split, terminal resize) must re-render the affected
-buffers — without it tables keep the stale width(truncated/overflowing
-borders), and no manual refresh short of an edit repairs them.
+Smart tables are fitted to the window at render time, so a geometry change
+(sidebar toggle, split, terminal resize) must re-render the affected buffers —
+without it tables keep the stale width(truncated/overflowing borders), and no
+manual refresh short of an edit repairs them.
+
+The same applies to the options that decide that geometry. `'wrap'` matters
+most: under `per_line` a row is drawn as one overlay per screen row its raw
+text occupies, so toggling `'wrap'` changes how many overlays the row needs and
+leaves every one of them on the wrong line. The gutter options(`'number'`,
+`'signcolumn'`, …) move the text width, and `'linebreak'`/`'breakindent'`/
+`'showbreak'` move the soft-wrap break columns. markview re-renders on
+`'wrap'`/`'linebreak'` itself, but not reliably and not for the rest, so this
+covers them all.
 
 `M.register()` is called on the first smart-table render(see `table.lua`), so
 sessions that never render a smart table never get the autocmd.
@@ -17,7 +26,7 @@ local spec = require("markview.spec")
 local timer = vim.uv.new_timer()
 
 ---@param args vim.api.keyset.create_autocmd.callback_args
-local function on_resized(args)
+local function on_layout_change(args)
   local state = require("markview.state")
 
   if not state.enabled() then
@@ -30,8 +39,8 @@ local function on_resized(args)
     return
   end
 
-  --- `WinResized` reports the affected windows; `VimResized` does not, but
-  --- it resizes the whole layout, so every window is affected.
+  --- `WinResized` reports the affected windows; `VimResized` and `OptionSet`
+  --- do not, but both can affect the whole layout, so take every window.
   ---
   --- NOTE: `vim.v.event` is only valid *inside* the autocmd, so the buffer
   --- list must be resolved before deferring.
@@ -96,7 +105,7 @@ end
 
 local group
 
---- Registers the resize autocmd(once).
+--- Registers the re-render autocmds(once).
 M.register = function()
   if group then
     return
@@ -109,7 +118,25 @@ M.register = function()
     "VimResized",
   }, {
     group = group,
-    callback = on_resized,
+    callback = on_layout_change,
+  })
+
+  --- Options that move the text width or the soft-wrap break columns, which
+  --- the fitted width and the per-line overlay anchors are both computed from.
+  vim.api.nvim_create_autocmd("OptionSet", {
+    group = group,
+    pattern = {
+      "wrap",
+      "linebreak",
+      "breakindent",
+      "showbreak",
+      "number",
+      "relativenumber",
+      "numberwidth",
+      "signcolumn",
+      "foldcolumn",
+    },
+    callback = on_layout_change,
   })
 end
 

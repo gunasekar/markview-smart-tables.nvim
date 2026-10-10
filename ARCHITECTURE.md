@@ -36,6 +36,7 @@ One module per concern:
 | `wrap.lua`   | pure fit/word-wrap maths (`fit_columns`, `word_wrap`, `style_wrap`) |
 | `inline.lua` | per-cell inline styling from treesitter (`{ text, hl }` segments) |
 | `table.lua`  | virtual line builders, cell extraction, placement, render     |
+| `per_line.lua` | per-source-row placement, used when `per_line = true`        |
 | `resize.lua` | re-render affected buffers on window resize                   |
 | `health.lua` | `:checkhealth markview-smart-tables` preconditions            |
 
@@ -48,7 +49,7 @@ The smart path declines — returning control to stock markview — when:
 - markview's `linewise_hybrid_mode` is active (its per-line clears would strip
   part of the virtual table's conceals, duplicating rows)
 - there is no line to anchor the virtual table to (table spans the whole
-  buffer)
+  buffer) — block placement only; per-line placement needs no anchor
 
 ## The fully virtual rendering
 
@@ -86,10 +87,50 @@ table the way a CLI renderer would:
    markers, data rows with a thin rule between them (reusing markview's
    `parts.separator` glyphs in the border colour), bottom border. Cell
    alignment follows the column's `:---:` markers.
-5. **Hide** every source line with a `conceal_lines` extmark (zero screen
-   height — immune to soft-wrap) and attach the virtual table to the nearest
-   visible neighbour line (`virt_lines` on a concealed line are not drawn:
-   prefer the line above, else `virt_lines_above` on the line after).
+5. **Group** the output lines by the source line each belongs to —
+   `{ above, first, below }` per row, where markview's parse gives the 1:1
+   mapping (`text[1]` header, `text[2]` separator, `text[2 + i]` row `i`).
+6. **Place**, in one of two ways. The rendered table is identical either way;
+   only the extmarks differ.
+
+   *Block* (default) — flatten the groups back into one list, hide every source
+   line with a `conceal_lines` extmark (zero screen height — immune to
+   soft-wrap) and attach the whole table to the nearest visible neighbour line
+   (`virt_lines` on a concealed line are not drawn: prefer the line above, else
+   `virt_lines_above` on the line after). Zero-height lines have no screen row
+   for a cursor, which is why the cursor vanishes inside a fitted table.
+
+   *Per-line* (`per_line = true`, `per_line.lua`) — conceal each source row's own text in place
+   (`conceal` over `[0, #line)`) and paint that row's rendered lines over it as
+   `overlay` virtual text, hanging its borders off the same row as
+   `virt_lines`/`virt_lines_above`. The rows keep their screen height, so the
+   cursor stays visible and maps one-to-one onto rendered rows.
+
+   The complication is that `conceal` hides characters without shortening the
+   line: soft-wrap height still follows the *raw* width, so under `'wrap'` a
+   source row occupies `ceil(raw / window)` screen rows whatever is painted on
+   it. Painting only the first would leave the rest blank, so the row's
+   continuation lines are painted onto them too — an overlay anchored at the
+   byte column where a soft-wrap row begins lands at its left edge
+   (`wrap.break_cols` finds those columns by display width, since soft-wrap is laid
+   out in cells and a table row is rarely pure ASCII). A row that renders to
+   fewer lines than it occupies is padded with empty cells; one that renders to
+   more spills the surplus into `virt_lines`. Three further consequences:
+
+   - `virt_lines_above` is not drawn when its row is the window's topmost line,
+     so a table starting at row 0 folds its top border onto the header row's own
+     screen line instead.
+   - `'linebreak'`, `'breakindent'` and `'showbreak'` move the break columns off
+     the fixed window-width grid, which `wrap.break_cols` assumes; such windows
+     fall back to block placement.
+   - markview's other renderers decorate the raw cell text, each in its own
+     namespace (`markview/inline` code padding and link icons, `markview/latex`
+     maths, …). They are invisible on a zero-height row but would be drawn on
+     top of a per-line row, so every foreign `markview/*` namespace is cleared
+     over the rows we own (deferred with `vim.schedule`, since markview renders
+     its languages in `pairs()` order). A cell holding two `$` signs is enough
+     to pull the latex renderer in, so clearing only one namespace is not
+     enough.
 
 All extmarks go into **markview's markdown namespace** (`markdown.ns`), so
 markview's own clear/re-render cycle manages their lifetime — the plugin needs
@@ -121,6 +162,12 @@ Internal (no stability guarantee — the compatibility risk lives here):
   (shared namespace)
 - `markview.renderers.markdown.tostring` — cell text/width fallback when
   treesitter is unavailable
+- the `markview/*` extmark namespaces — every one except markview's markdown
+  namespace is cleared over the rows owned by per-line placement. Each language
+  renderer has its own (`markview/inline`, `markview/latex`, `markview/html`,
+  …) and they all decorate the **raw** cell text, so they would be drawn on top
+  of the fitted row. Found by name through `nvim_get_namespaces`, so a new
+  markview language is covered without a change here.
 - `markview.spec` — `markdown.tables` config (`parts`/`hl`),
   `markdown_inline.inline_codes` (cell code highlight + padding),
   `markdown_inline.hyperlinks` (cell link icon/highlight), `preview.debounce`,

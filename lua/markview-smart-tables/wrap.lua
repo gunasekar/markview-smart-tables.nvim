@@ -1,9 +1,9 @@
 --[[
 Column-fit & word-wrap maths.
 
-`word_wrap` and `fit_columns` are pure(display-width-aware, no editor state)
-so they can be unit-tested in isolation; `fit_target` resolves the configured
-`wrap_width` against a window.
+`word_wrap`, `fit_columns` and `break_cols` are pure(display-width-aware, no
+editor state) so they can be unit-tested in isolation; `text_width` and
+`fit_target` resolve the configured `wrap_width` against a window.
 ]]
 local M = {}
 
@@ -295,10 +295,65 @@ end
 ---@param win integer
 ---@param config table Config with a `wrap_width` field.
 ---@return integer
-M.fit_target = function(win, config)
+--- Byte columns(0-based, on character boundaries) at which each of {line}'s
+--- soft-wrap screen rows begins, in a window {width} cells wide:
+--- `{ 0, <col at width>, <col at 2*width>, … }`. One entry per screen row the
+--- line occupies, so `#` is its height.
+---
+--- Soft-wrap lays a line out in display cells, not bytes, so the boundaries are
+--- found by display width. `strdisplaywidth` over a prefix is the only reliable
+--- measure of that, and calling it per character would cost a vimscript call
+--- per byte of every table row on every redraw — hence one binary search per
+--- screen row instead.
+---@param line string
+---@param width integer
+---@return integer[]
+M.break_cols = function(line, width)
+  local anchors = { 0 }
+  local total = vim.fn.strdisplaywidth(line)
+
+  if width < 1 or total <= width then
+    return anchors
+  end
+
+  --- 1-based byte index of each character, plus one past the line end.
+  local starts = vim.str_utf_pos(line)
+  starts[#starts + 1] = #line + 1
+
+  local target = width
+
+  while target < total do
+    --- Smallest character start whose display column reaches {target}.
+    local lo, hi = 1, #starts
+
+    while lo < hi do
+      local mid = math.floor((lo + hi) / 2)
+
+      if vim.fn.strdisplaywidth(line:sub(1, starts[mid] - 1)) < target then
+        lo = mid + 1
+      else
+        hi = mid
+      end
+    end
+
+    anchors[#anchors + 1] = starts[lo] - 1
+    target = target + width
+  end
+
+  return anchors
+end
+
+--- Width(in cells) available for text in {win}: the window minus its gutters
+--- (`'number'`, signs, folds).
+---@param win integer
+---@return integer
+M.text_width = function(win)
   local info = vim.fn.getwininfo(win)[1]
-  local textoff = info and info.textoff or 0
-  local win_width = vim.api.nvim_win_get_width(win) - textoff
+  return vim.api.nvim_win_get_width(win) - (info and info.textoff or 0)
+end
+
+M.fit_target = function(win, config)
+  local win_width = M.text_width(win)
 
   local ww = config.wrap_width
 

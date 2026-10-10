@@ -45,6 +45,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
                          -- or absolute column count (n>1)
     wrap_minwidth = 5,   -- smallest a column may shrink to before long
                          -- words are hard-broken
+    per_line = false,    -- true = draw each source row on its own line, so the
+                         -- cursor stays visible inside a fitted table
   },
 },
 ```
@@ -72,11 +74,15 @@ markview is installed, and that the renderer hook is wired up.
   degraded fallback you'd otherwise get).
 - **`'wrap'` off** — only tables that overflow the window are fitted; fitting
   tables keep markview's stock in-buffer rendering (real text, visible cursor).
-- **Editing / navigating** — a fitted table is drawn over its source lines,
-  which are concealed to zero height, so the cursor is invisible while it is on
-  the table (in any mode). Reveal the raw markdown to navigate or edit it with
-  markview's hybrid mode (`preview.hybrid_modes`) — see [Editing and navigating
-  fitted tables](#editing-and-navigating-fitted-tables).
+- **Navigating** — by default the source lines are concealed to zero screen
+  height, which leaves no row for the cursor to sit on: it is invisible while on
+  a fitted table, in any mode. `per_line = true` gives each source row its own
+  screen line back, so the cursor stays visible and `j`/`k` step one table row at
+  a time.
+- **Editing** — a fitted table never shows the raw `| a | b |` text, with or
+  without `per_line`. markview's hybrid mode (`preview.hybrid_modes`) reveals it
+  under the cursor. Both topics are covered in [Editing and navigating fitted
+  tables](#editing-and-navigating-fitted-tables).
 - **Inline styling** — bold, italic, strikethrough, inline code, and links
   inside cells are preserved through the word-wrap. Styling is read from
   treesitter (the same captures markview uses); code spans and links additionally
@@ -85,7 +91,9 @@ markview is installed, and that the renderer hook is wired up.
   glyph). Text markview substitutes — entities (`&amp;` → `&`), emoji shortcodes,
   escapes (`\|` → `|`) — is applied too (via markview's `tostring`), so fitted
   cells match markview's stock tables.
-- **Window resizes** (splits, sidebars, terminal) re-fit tables automatically.
+- **Window resizes** (splits, sidebars, terminal) re-fit tables automatically,
+  and so do the options that change the usable width — `'wrap'`, `'number'`,
+  `'signcolumn'` and the rest of the gutter and soft-wrap options.
 - Tables mid-edit (e.g. a row missing its leading `|`), tables markview can't
   place virtually, and Neovim < 0.11 all fall back to stock rendering — the
   plugin never hides content it can't redraw.
@@ -95,16 +103,40 @@ The table borders, separators, and highlights reuse your markview
 
 ## Editing and navigating fitted tables
 
-A fitted table is drawn as virtual text over its source lines, which are
-concealed to **zero screen height** (`conceal_lines`) — that is what lets cells
-wrap onto multiple lines. This has an inherent trade-off: the cursor lives in
-that hidden text, so **while the cursor is on a fitted table it is invisible**.
-A motion like `e` walks through the cells, but the cursor appears pinned to the
-table's top line until it leaves — in *any* mode, not just when editing. You
-cannot have the fitted render and a visibly tracking cursor on the same lines at
-once; this is true of any fully-virtual table rendering.
+By default a fitted table is drawn as virtual text over its source lines, which
+are concealed to **zero screen height** (`conceal_lines`) — that is what lets
+cells wrap onto multiple lines. This has a trade-off: the cursor lives in that
+hidden text, and a zero-height line has no screen row to draw a cursor on, so
+**while the cursor is on a fitted table it is invisible**. A motion like `j`
+walks through the rows, but the cursor appears pinned to the table's top line
+until it leaves — in *any* mode, not just when editing.
 
-To get a visible cursor (and to edit), reveal the raw markdown with markview's
+### `per_line` — keep the cursor visible
+
+Set `per_line = true` to draw each source row on its **own** line instead. The
+render is identical; the difference is that every table row keeps its screen
+height, so the cursor is visible and moves one table row per `j`/`k`:
+
+```lua
+require("markview-smart-tables").setup({ per_line = true })
+```
+
+Its caveats:
+
+- **The row is tracked, not the cell.** The row's raw markdown is concealed in
+  place, so all of its buffer columns on a given screen line collapse to that
+  line's left edge. The cursor steps down through a row's screen lines as you
+  move past each soft-wrap boundary, but it never points at the cell you are on.
+  `cursorline` likewise highlights one screen line, not the whole row.
+- **Not under an irregular soft-wrap.** Under `'wrap'`, a row's rendered lines
+  are painted onto the screen rows its raw text occupies, which assumes lines
+  break every window-width cells. `'linebreak'`, `'breakindent'` and
+  `'showbreak'` move those break points, so tables fall back to the default
+  placement in a window using any of them.
+
+### Editing
+
+To edit a table you still want the raw markdown back. Reveal it with markview's
 **hybrid mode** by listing the modes you navigate/edit in under
 `preview.hybrid_modes`. It is **empty by default**, so nothing reveals until you
 set it:
@@ -138,7 +170,12 @@ text/lines. The cell text on screen is the buffer's own text. Smart tables
 instead hides the source lines (`conceal_lines`, zero screen height) and emits
 the entire table — borders, headers, and every cell, including wrapped lines —
 as virtual lines. The cell text on screen is a re-tokenized copy painted over
-the concealed source.
+the concealed source. Under `per_line = true` the same rendered table is split
+across the source rows instead of one block: each row's raw text is concealed in
+place and its rendered lines painted over the screen rows that raw text
+occupies, with borders and any surplus attached to that row as virtual lines.
+The source rows keep their screen height, which is what makes the cursor
+visible.
 
 **Why the difference exists.** Inline virtual text is positioned by buffer
 column, and Neovim computes soft-wrap break points from raw buffer columns
@@ -166,7 +203,10 @@ output line; because the layout is sized to the window, it also installs a
 debounced resize autocmd (lazily, only once a fitted table is actually drawn).
 Smart tables declines back to stock rendering when fitting isn't needed (table
 already fits with `'wrap'` off, Neovim < 0.11, mid-edit rows, `linewise_hybrid_mode`,
-no anchor line), so the extra cost applies only to tables it fits.
+no anchor line), so the extra cost applies only to tables it fits. `per_line`
+trades the single virtual-line block for a handful of extmarks per source row,
+and drops markview's own inline decorations on those rows (the fitted copy
+renders that styling itself).
 
 ## Options
 
@@ -175,6 +215,7 @@ no anchor line), so the extra cost applies only to tables it fits.
 | `enable`        | `true`  | Render smart tables (`false` = stock markview rendering only)            |
 | `wrap_width`    | `0.9`   | Max table width — window fraction (`0<n<=1`) or absolute columns (`n>1`) |
 | `wrap_minwidth` | `5`     | Smallest column width before long words are hard-broken                  |
+| `per_line`      | `false` | Draw each source row on its own line so the cursor stays visible         |
 
 ## Known limitations
 

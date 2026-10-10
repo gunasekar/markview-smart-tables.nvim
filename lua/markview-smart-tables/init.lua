@@ -22,10 +22,12 @@ local M = {}
 ---@field enable boolean Render smart tables(`false` -> stock markview rendering only).
 ---@field wrap_width number Max table width: a fraction `(0,1]` of the window, or an absolute column count `>1`.
 ---@field wrap_minwidth integer Smallest width(in cells) a column may shrink to; longer words are hard-broken.
+---@field per_line boolean Draw each source row on its own line so the cursor stays visible inside a fitted table.
 M.config = {
   enable = true,
   wrap_width = 0.9,
   wrap_minwidth = 5,
+  per_line = false,
 }
 
 ---@param opts markview_smart_tables.config | nil
@@ -54,6 +56,7 @@ M.render = function(buffer, item)
       local config = vim.tbl_extend("force", mv_config, {
         wrap_width = M.config.wrap_width,
         wrap_minwidth = M.config.wrap_minwidth,
+        per_line = M.config.per_line,
       })
 
       if require("markview-smart-tables.table").render(buffer, item, config, md.ns) == true then

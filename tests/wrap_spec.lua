@@ -145,6 +145,42 @@ return function(t)
   end)
 
   ------------------------------------------------------------------------
+  --- break_cols
+  ------------------------------------------------------------------------
+
+  t.it("break_cols: a line that fits occupies one screen row", function()
+    t.same({ 0 }, wrap.break_cols(string.rep("x", 40), 80))
+    t.same({ 0 }, wrap.break_cols("", 80))
+  end)
+
+  t.it("break_cols: an exact multiple of the width does not gain a row", function()
+    t.same({ 0 }, wrap.break_cols(string.rep("x", 80), 80))
+    t.same({ 0, 80 }, wrap.break_cols(string.rep("x", 160), 80))
+  end)
+
+  t.it("break_cols: one column per screen row, at each width boundary", function()
+    t.same({ 0, 80, 160 }, wrap.break_cols(string.rep("x", 161), 80))
+    t.same({ 0, 80, 160, 240 }, wrap.break_cols(string.rep("x", 300), 80))
+  end)
+
+  t.it("break_cols: columns are byte offsets found by display width", function()
+    --- Each "⇒" is 3 bytes but one display cell, so 25 of them are 25 cells
+    --- (three rows at width 10) and the boundaries at display columns 10 and 20
+    --- sit at bytes 30 and 60, not 10 and 20.
+    t.same({ 0, 30, 60 }, wrap.break_cols(string.rep("⇒", 25), 10))
+  end)
+
+  t.it("break_cols: double-width glyphs count as two cells", function()
+    --- 12 x "漢" = 24 display cells, 36 bytes; a row boundary every 10 cells
+    --- lands after 5 glyphs (15 bytes) and after 10 (30 bytes).
+    t.same({ 0, 15, 30 }, wrap.break_cols(string.rep("漢", 12), 10))
+  end)
+
+  t.it("break_cols: a degenerate width yields a single row", function()
+    t.same({ 0 }, wrap.break_cols(string.rep("x", 100), 0))
+  end)
+
+  ------------------------------------------------------------------------
   --- fit_target (needs a window; uses the current one)
   ------------------------------------------------------------------------
 

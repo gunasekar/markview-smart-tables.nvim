@@ -4,10 +4,19 @@ hook(`renderers.markdown_table`). See `init.lua` for the hook, `wrap.lua` for
 the fit/word-wrap maths, and `resize.lua` for the re-render-on-resize autocmd
 this module registers on first use.
 
-`M.render(buffer, item, config, ns)` redraws the whole fitted table as
-virtual lines over the hidden(`conceal_lines`) source rows. {config} is
-markview's `markdown.tables` config(for `parts`/`hl`) merged with this
-plugin's options; {ns} is markview's markdown namespace, so markview's own
+`M.render(buffer, item, config, ns)` redraws the whole fitted table, in one of
+two placements(the output is identical either way):
+
+- `place`, the default — the source rows are hidden(`conceal_lines`, zero
+  screen height) and the table is emitted as one `virt_lines` block on a
+  neighbouring line. The cursor has no row to be drawn on inside the table.
+- `per_line.place`, under `per_line = true` — every source row keeps its screen
+  height, so the cursor stays visible and tracks the row it is on. It takes the
+  same groups and declines(back to `place`) when it cannot draw them; see
+  `per_line.lua`.
+
+{config} is markview's `markdown.tables` config(for `parts`/`hl`) merged with
+this plugin's options; {ns} is markview's markdown namespace, so markview's own
 clear cycle wipes these extmarks. Returns `false`(without rendering) when the
 table should be handled by markview's stock renderer instead: always on
 Neovim < 0.11, and under `'nowrap'` whenever the table already fits the
@@ -21,6 +30,7 @@ local spec = require("markview.spec")
 local wrap = require("markview-smart-tables.wrap")
 local resize = require("markview-smart-tables.resize")
 local inline = require("markview-smart-tables.inline")
+local per_line = require("markview-smart-tables.per_line")
 
 ------------------------------------------------------------------------------
 --- Virtual line builders
@@ -176,17 +186,17 @@ local function content_line(L, cells, bars, bhl, center, default_hl)
   return line
 end
 
---- Appends the content lines for one logical row of tokenised {cells} to
---- {vlines}, style-wrapping each cell to its column width(tallest cell sets the
---- height).
+--- The content lines for one logical row of tokenised {cells}, style-wrapping
+--- each cell to its column width(tallest cell sets the height). Always at least
+--- one line.
 ---@param L markview_smart_tables.layout
----@param vlines table[]
 ---@param cells table[] List per column of `{ words, plain }`.
 ---@param bars? string[]
 ---@param bhl? string[]
 ---@param center? boolean
 ---@param default_hl? string
-local function emit_row(L, vlines, cells, bars, bhl, center, default_hl)
+---@return table[]
+local function row_lines(L, cells, bars, bhl, center, default_hl)
   local wrapped, n = {}, 1
 
   for c = 1, L.ncols do
@@ -194,41 +204,102 @@ local function emit_row(L, vlines, cells, bars, bhl, center, default_hl)
     n = math.max(n, #wrapped[c])
   end
 
+  local lines = {}
+
   for k = 1, n do
     local row = {}
     for c = 1, L.ncols do
       row[c] = wrapped[c][k] or {}
     end
-    vlines[#vlines + 1] = content_line(L, row, bars, bhl, center, default_hl)
+    lines[#lines + 1] = content_line(L, row, bars, bhl, center, default_hl)
   end
+
+  return lines
 end
 
---- The whole virtual table: top border, centred header, separator, data rows
---- with a thin rule between them(separator glyphs in the border colour, so
---- wrapped multi-line rows stay readable), bottom border. Header cell text uses
---- markview's header highlight(`MarkviewTableHeader` -> `@markup.heading`, bold
---- in typical themes) so headers stand out.
+--- The output lines belonging to one *source* row, split by where they can be
+--- drawn: {first} is the row's own screen line, {cont} its wrapped
+--- continuation lines, and {above}/{after} the borders around it. {blank} is an
+--- empty row of the same shape, used to pad {cont} out when the source row
+--- occupies more screen rows than the render needs(see `place_per_line`).
+---@class markview_smart_tables.group
+---
+---@field above table[] Border lines drawn above the source row.
+---@field first table The source row's own screen line.
+---@field cont table[] The row's wrapped continuation lines.
+---@field after table[] Border lines drawn below the row.
+---@field blank table An empty content line of this row's shape.
+
+--- Groups {lines}(from `row_lines`, or a single border line) with the {blank}
+--- padding line of the same shape and any border lines {above} the row.
+---@param lines table[]
+---@param blank table
+---@param above? table[]
+---@return markview_smart_tables.group
+local function group(lines, blank, above)
+  local g = { above = above or {}, first = lines[1], cont = {}, after = {}, blank = blank }
+
+  for i = 2, #lines do
+    g.cont[#g.cont + 1] = lines[i]
+  end
+
+  return g
+end
+
+--- The whole table, grouped by the source line each part belongs to: top
+--- border + centred header, separator, then each data row preceded by a thin
+--- rule(separator glyphs in the border colour, so wrapped multi-line rows stay
+--- readable), with the bottom border hanging below the last row. Header cell
+--- text uses markview's header highlight(`MarkviewTableHeader` ->
+--- `@markup.heading`, bold in typical themes) so headers stand out.
+---
+--- One group per source line, in source order: markview parses `text[1]` as the
+--- header, `text[2]` as the separator and `text[2 + i]` as row {i}.
 ---@param L markview_smart_tables.layout
 ---@param header table[]
 ---@param rows table[][]
----@return table[]
-local function build_vlines(L, header, rows)
-  local vlines = {}
+---@return markview_smart_tables.group[]
+local function build_groups(L, header, rows)
   local header_hl = (L.hls.header or {})[1]
+  local row_blank = content_line(L, {}, L.parts.row, L.hls.row, false, nil)
+  local groups = {}
 
-  vlines[#vlines + 1] = junction_line(L, L.parts.top, L.hls.top)
-  emit_row(L, vlines, header, L.parts.header, L.hls.header, true, header_hl)
-  vlines[#vlines + 1] = separator_line(L)
+  groups[1] = group(
+    row_lines(L, header, L.parts.header, L.hls.header, true, header_hl),
+    content_line(L, {}, L.parts.header, L.hls.header, true, header_hl),
+    { junction_line(L, L.parts.top, L.hls.top) }
+  )
+  groups[2] = group({ separator_line(L) }, row_blank)
 
   for ri, r in ipairs(rows) do
-    if ri > 1 then
-      vlines[#vlines + 1] = junction_line(L, L.parts.separator, L.hls.bottom)
-    end
-
-    emit_row(L, vlines, r, L.parts.row, L.hls.row, false, nil)
+    groups[2 + ri] = group(
+      row_lines(L, r, L.parts.row, L.hls.row, false, nil),
+      row_blank,
+      ri > 1 and { junction_line(L, L.parts.separator, L.hls.bottom) } or nil
+    )
   end
 
-  vlines[#vlines + 1] = junction_line(L, L.parts.bottom, L.hls.bottom)
+  --- Below the last source row — the separator, for a table with no data rows.
+  local last = groups[#groups]
+  last.after[#last.after + 1] = junction_line(L, L.parts.bottom, L.hls.bottom)
+
+  return groups
+end
+
+--- The groups concatenated back into one top-to-bottom list of lines, for the
+--- block placement.
+---@param groups markview_smart_tables.group[]
+---@return table[]
+local function flatten(groups)
+  local vlines = {}
+
+  for _, g in ipairs(groups) do
+    vim.list_extend(vlines, g.above)
+    vlines[#vlines + 1] = g.first
+    vim.list_extend(vlines, g.cont)
+    vim.list_extend(vlines, g.after)
+  end
+
   return vlines
 end
 
@@ -475,7 +546,19 @@ M.render = function(buffer, item, config, ns)
     hls = config.hl or {},
   }
 
-  return place(buffer, ns, range, nlines, build_vlines(L, header, rows))
+  local groups = build_groups(L, header, rows)
+
+  --- Per-source-row placement relies on the parse's 1:1 correspondence
+  --- (`text[1]` header, `text[2]` separator, `text[2 + i]` row {i}). It holds
+  --- by construction; attaching rendered lines to the wrong source rows would
+  --- be silent corruption, so fall back rather than trust it.
+  if config.per_line == true and #groups == nlines then
+    if per_line.place(buffer, ns, win, range, groups) == true then
+      return true
+    end
+  end
+
+  return place(buffer, ns, range, nlines, flatten(groups))
 end
 
 return M
